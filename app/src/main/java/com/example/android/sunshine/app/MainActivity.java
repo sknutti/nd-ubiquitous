@@ -16,11 +16,16 @@
 package com.example.android.sunshine.app;
 
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
@@ -38,11 +43,19 @@ import com.example.android.sunshine.app.data.WeatherContract;
 import com.example.android.sunshine.app.sync.SunshineSyncAdapter;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GooglePlayServicesUtil;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.gcm.GoogleCloudMessaging;
+import com.google.android.gms.wearable.Asset;
+import com.google.android.gms.wearable.DataApi;
+import com.google.android.gms.wearable.PutDataMapRequest;
+import com.google.android.gms.wearable.PutDataRequest;
+import com.google.android.gms.wearable.Wearable;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
-public class MainActivity extends AppCompatActivity implements ForecastFragment.Callback {
+public class MainActivity extends AppCompatActivity implements ForecastFragment.Callback, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener {
 
     private final String LOG_TAG = MainActivity.class.getSimpleName();
     private static final String DETAILFRAGMENT_TAG = "DFTAG";
@@ -59,6 +72,16 @@ public class MainActivity extends AppCompatActivity implements ForecastFragment.
     private boolean mTwoPane;
     private String mLocation;
     private GoogleCloudMessaging mGcm;
+    private GoogleApiClient mGoogleApiClient;
+
+    boolean mRegisteredUpdateReceiver = false;
+    final BroadcastReceiver mUpdateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            Log.d(LOG_TAG, "Hit the watch face update receiver");
+            sendForecast();
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -120,6 +143,13 @@ public class MainActivity extends AppCompatActivity implements ForecastFragment.
             } else if (regId.isEmpty()) {
                 registerInBackground(this);
             }
+
+            mGoogleApiClient = new GoogleApiClient.Builder(this)
+                    .addApi(Wearable.API)
+                    .addConnectionCallbacks(this)
+                    .addOnConnectionFailedListener(this)
+                    .build();
+
         } else {
             Log.i(LOG_TAG, "No valid Google Play Services APK. Weather alerts will be disabled.");
             // Store regID as null
@@ -150,8 +180,26 @@ public class MainActivity extends AppCompatActivity implements ForecastFragment.
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        if (mGoogleApiClient != null) {
+            mGoogleApiClient.connect();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        mGoogleApiClient.disconnect();
+
+        unregisterReceiver();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+
+        registerReceiver();
 
         // If Google Play Services is not available, some features, such as GCM-powered weather
         // alerts, will not be available.
@@ -327,5 +375,89 @@ public class MainActivity extends AppCompatActivity implements ForecastFragment.
         editor.putString(PROPERTY_REG_ID, regId);
         editor.putInt(PROPERTY_APP_VERSION, appVersion);
         editor.commit();
+    }
+
+    private void registerReceiver() {
+        if (!mRegisteredUpdateReceiver) {
+            mRegisteredUpdateReceiver = true;
+            IntentFilter filter = new IntentFilter("update-watch-face");
+            MainActivity.this.registerReceiver(mUpdateReceiver, filter);
+        }
+    }
+
+    private void unregisterReceiver() {
+        if (mRegisteredUpdateReceiver) {
+            mRegisteredUpdateReceiver = false;
+            MainActivity.this.unregisterReceiver(mUpdateReceiver);
+        }
+    }
+
+    @Override
+    public void onConnected(Bundle bundle) {
+        sendForecast();
+    }
+
+    @Override
+    public void onConnectionSuspended(int i) {
+
+    }
+
+    @Override
+    public void onConnectionFailed(ConnectionResult result) {
+
+    }
+
+    public void sendForecast() {
+        // get the data
+        String location = Utility.getPreferredLocation(this);
+        Uri weatherForLocationUri = WeatherContract.WeatherEntry.buildWeatherLocationWithStartDate(
+                location, System.currentTimeMillis());
+        Cursor cursor = getContentResolver().query(
+                weatherForLocationUri,
+                new String[]{
+                        WeatherContract.WeatherEntry.COLUMN_MAX_TEMP,
+                        WeatherContract.WeatherEntry.COLUMN_MIN_TEMP,
+                        WeatherContract.WeatherEntry.COLUMN_WEATHER_ID},
+                null,
+                null,
+                WeatherContract.WeatherEntry.COLUMN_DATE + " ASC");
+        if (cursor.moveToFirst()) {
+            final float maxTemp = cursor.getFloat(0);
+            final float minTemp = cursor.getFloat(1);
+            int weatherId = cursor.getInt(2);
+
+            Bitmap largeBitmap = BitmapFactory.decodeResource(this.getResources(), Utility.getIconResourceForWeatherCondition(weatherId));
+            Bitmap bitmap = Bitmap.createScaledBitmap(largeBitmap, 100, 100, false);
+            largeBitmap.recycle();
+            PutDataMapRequest putDataMapRequest = PutDataMapRequest.create("/forecast");
+            if (bitmap != null) {
+                Asset asset = createAssetFromBitmap(bitmap);
+                putDataMapRequest.getDataMap().putAsset("icon", asset);
+                Log.d(LOG_TAG, asset.toString());
+            }
+            putDataMapRequest.getDataMap().putString("high", Utility.formatTemperature(this, maxTemp));
+            putDataMapRequest.getDataMap().putString("low", Utility.formatTemperature(this, minTemp));
+            Log.d(LOG_TAG, Utility.formatTemperature(this, maxTemp));
+            Log.d(LOG_TAG, Utility.formatTemperature(this, minTemp));
+
+            PutDataRequest request = putDataMapRequest.asPutDataRequest();
+            Wearable.DataApi.putDataItem(mGoogleApiClient, request).setResultCallback(new ResultCallback<DataApi.DataItemResult>() {
+                @Override
+                public void onResult(DataApi.DataItemResult dataItemResult) {
+                    if (!dataItemResult.getStatus().isSuccess()) {
+                        Log.e(LOG_TAG, "Failed");
+                    } else {
+                        Log.e(LOG_TAG, "Success");
+                    }
+                }
+            });
+        }
+        cursor.close();
+    }
+
+    private static Asset createAssetFromBitmap(Bitmap bitmap) {
+        final ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, byteStream);
+        return Asset.createFromBytes(byteStream.toByteArray());
     }
 }

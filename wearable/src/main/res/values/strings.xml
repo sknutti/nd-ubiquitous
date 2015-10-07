@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Sunshine</string>
+    <string name="my_digital_name">Sunshine Face</string>
+    <string name="pref_bitmap_key">encoded_icon</string>
+    <string name="pref_bitmap_default" />
+    <string name="pref_high_temp_key">high_temp</string>
+    <string name="pref_high_temp_default">0</string>
+    <string name="pref_low_temp_key">low_temp</string>
+    <string name="pref_low_temp_default">0</string>
+</resources>

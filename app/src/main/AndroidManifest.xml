@@ -35,6 +35,11 @@
         android:protectionLevel="signature" />
     <uses-permission android:name="com.example.android.sunshine.app.permission.C2D_MESSAGE" />
 
+    <!-- Permissions required by the wearable app -->
+    <uses-permission android:name="com.google.android.permission.PROVIDE_BACKGROUND" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -73,7 +78,8 @@
         <provider
             android:name=".data.WeatherProvider"
             android:authorities="@string/content_authority"
-            android:exported="false"
+            android:readPermission="android.permission.permRead"
+            android:exported="true"
             android:syncable="true" />
 
         <!-- SyncAdapter's dummy authentication service -->
